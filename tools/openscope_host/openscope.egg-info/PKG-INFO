@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: openscope
+Version: 0.1.0
+Summary: Host tool for the OpenScope 2C53T remote protocol (USB CDC)
+Requires-Python: >=3.9
+Requires-Dist: pyserial>=3.5
+Provides-Extra: mcp
+Requires-Dist: mcp>=1.2; extra == "mcp"

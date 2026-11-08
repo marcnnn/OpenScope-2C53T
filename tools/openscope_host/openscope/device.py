@@ -51,6 +51,173 @@ IDEMPOTENT = frozenset({proto.CMD_PING, proto.CMD_STATUS, proto.CMD_GET_METER,
 READ_ONLY_SHELL = ("version", "status", "uptime", "usbstat", "fwstat", "help")
 
 
+# ── Shell levels for the MCP server (mcp_server.py --level) ──────────────
+# Names are rows of the firmware's shell table (shell_cmds[] in
+# firmware/src/drivers/usb_debug.c). A name matches a line it is a
+# whole-word prefix of, as in the firmware's dispatcher, so "trig" never
+# matches "trig2 ..." and "usbstat heal" is not "usbstat".
+# tests/test_mcp_server.py checks every name below against that table and
+# fails when a row is added that nobody has classified.
+SHELL_LEVELS = ("readonly", "bench", "unsafe")
+
+# --level bench = READ_ONLY_SHELL plus these: the scope/acquisition setters
+# and measurement reads the experiment scripts use (scripts/bench.py,
+# scripts/exp*.py). They change volatile state only (RAM, FPGA registers,
+# the trigger DAC) or read; the one flash-writing form of `mode`
+# (`mode startup ...`) is in NEVER_SHELL, which is checked first.
+BENCH_SHELL = (
+    # scope settings, through the same entry points the UI uses
+    "fpga scope timebase", "fpga scope range", "fpga scope center", "fpga scope vdiv",
+    "fpga scope trigmode", "fpga scope level", "fpga scope edge", "fpga scope hpos",
+    "fpga scope softtrig", "fpga scope graticule", "trig", "trig2", "mode",
+    # waveform pass/fail (EXP-69): teach/tol/clear/run/stop change RAM state only
+    "mask",
+    # acquisition knobs of the seam/poll experiments (EXP-29..54)
+    "fpga postedge", "fpga pollgap", "fpga autowait", "fpga rearmwait", "fpga rearm",
+    "fpga acqgate", "fpga acqbr", "fpga pairgap", "fpga unrotate", "fpga edgefilter",
+    "fpga holdread", "fpga diag clear",
+    # one FPGA read window, limited to the channel-read opcodes (BENCH_ARG_RULES)
+    "spi3 opread",
+    # measurements and reads
+    "fpga scope measure", "fpga scope freq", "fpga scope cal", "fpga scope coupling",
+    "spi3 read", "spi3 frame", "gpio read", "gpio scan",
+    "meter dump", "meter trace", "meter frontend", "meter adc-snapshot",
+    "cal status", "settings", "ui dump", "flash jedec", "flash read", "flash dump",
+)
+
+# At --level bench these commands also need their arguments (everything
+# after the name) to match: name -> (pattern, what it allows, why).
+BENCH_ARG_RULES = {
+    # `spi3 opread <op> [len [dump]]` clocks 0xFF filler under ANY opcode.
+    # On the configured design 01/02/06/07/08 are register WRITES the filler
+    # smashes (01 is the run register; `spi3 opsweep` skips them for that
+    # reason) and config-port opcodes (11, 41, 15, 3A, 3B, 3C) desynchronise
+    # it; 04/05 are the channel reads. Other opcodes need --level unsafe.
+    "spi3 opread": (
+        re.compile(r"(?:0[xX])?0?[45](?: (?:[0-9]{1,4}|0[xX][0-9a-fA-F]{1,4})(?: dump)?)?"),
+        "only opcode 04 or 05, as `spi3 opread 04|05 [len [dump]]`",
+        "other opcodes write FPGA registers under the 0xFF filler or hit the config port"),
+}
+
+# scope_shell never sends these, at any level. The rule: flash writes, boot
+# changes, resets, writes to caller-chosen addresses or pins, FPGA run-pin
+# pulses, and taking over the SPI3 pins (bit-bang, release, re-init outside
+# the acquisition park). Commands that drive a FIXED set of frontend pins to
+# caller-chosen levels or timings (`meter mux-arms`, `meter pc11-timing`, the
+# range relays) are not in it and stay at --level unsafe. Name -> why.
+# This covers the debug shell only: front-panel presses (scope_press) are not
+# filtered by level and can reach Settings > Startup on Boot (an MCU flash
+# write) and Settings > Firmware Update (reboot into DFU); see mcp_server.py.
+NEVER_SHELL_WHAT = ("flash writes, boot changes, resets, writes to caller-chosen addresses "
+                    "or pins, FPGA run-pin pulses, SPI3 pin takeover")
+NEVER_SHELL_ROWS = {
+    "fwload": "stages a firmware image into the W25Q cache (erases and writes it)",
+    "fwapply": "erases and reprograms the MCU application flash, then resets",
+    "fwswap": "installs a cached image over the MCU application flash, then resets",
+    "cal backup": "erases and rewrites the factory-calibration backup in the W25Q",
+    "cal restore": "rewrites the MCU factory-calibration page (0x08006000)",
+    "flash wtest": "erases and writes a W25Q sector",
+    "mem write": "writes any address (flash controller, GPIO, clocks, ...)",
+    "mode startup": "erases and rewrites the MCU flash sector that sets what the scope boots into",
+    "reboot": "reboots the scope (`reboot bootloader` = into the USB updater)",
+    "gpio set": "drives a GPIO pin",
+    "gpio mode": "changes a GPIO pin's direction",
+    "bench restore": "rewrites the modes and levels of 14 frontend/FPGA pins, including "
+                     "PB11, PC6 (FPGA SPI enable) and PB6 (SPI3 chip select)",
+    "spi3 armtest": "pulses the FPGA run pin (PB11 or PC6) directly",
+    "fpga dbgclk": "reconfigures PC6 as an output and clocks it",
+    "fpga dbgarm": "reconfigures PB11 as an output and drives it",
+    "fpga reinit": "replays the FPGA bitstream handshake (`rl` = Gowin RELOAD) and drives "
+                   "PB11; its <a-e><pin> option makes any pin a push-pull output and pulses "
+                   "it LOW for 10 ms, and `c9` is PC9, the power hold: the scope switches off",
+    "fpga busrelease": "hands SPI3 to an external master: PB3/PB5/PB6 become inputs and "
+                       "PB11/PC6 are driven HIGH; untested, and its source says to re-flash "
+                       "or power-cycle to undo it",
+    "fpga busreacquire": "re-initialises the SPI3 pins (PB3-PB6, PC6) and peripheral at /2 "
+                         "without parking acquisition (the undo of busrelease)",
+    "fpga configbb": "takes over the SPI3 pins and bit-bangs an FPGA SSPI configuration "
+                     "(FPGA_CONFIG_B builds)",
+    "spi3 edgecap": "takes over the SPI3 pins and bit-bangs CONFIG_ENABLE (0x15) frames "
+                    "(FPGA_CONFIG_B builds)",
+}
+# No such rows today. Denied so that a future command with one of these
+# names cannot reach --level unsafe before anyone has reviewed it.
+NEVER_SHELL_RESERVED = {
+    "flash erase": "would erase flash",
+    "flash write": "would write flash",
+    "iap": "would enter the IAP updater",
+    "dfu": "would enter DFU",
+    "reset": "would reset the scope",
+}
+NEVER_SHELL = {**NEVER_SHELL_ROWS, **NEVER_SHELL_RESERVED}
+
+SHELL_LINE_MAX = 127    # firmware CMD_BUF_SIZE - 1; it silently drops the rest
+
+
+def _word_prefix(line: str, name: str) -> bool:
+    return line == name or line.startswith(name + " ")
+
+
+def shell_refusal(line: str, level: str) -> Optional[str]:
+    """Why the MCP server must not send `line` at `level`, or None if it may.
+
+    What is checked is what runs: the caller sends " ".join(line.split()).
+    A control character is refused outright because the firmware's line
+    editor would rewrite the line after this check (backspace/DEL delete,
+    tabs are dropped: "fw<TAB>apply" runs fwapply). The deny-list is checked
+    before any allowlist, case-insensitively, so no level can lift it."""
+    if level not in SHELL_LEVELS:
+        raise ValueError(f"unknown shell level {level!r} (one of {', '.join(SHELL_LEVELS)})")
+    raw = line.strip()
+    if any(not (" " <= ch <= "~") for ch in raw):
+        return (f"{raw!r} is refused at every --level: it contains a control or non-ASCII "
+                "character, and the firmware's line editor applies backspace/DEL and drops "
+                "tabs, so what ran could differ from what was checked. "
+                "Send one plain printable-ASCII command.")
+    if len(raw) > SHELL_LINE_MAX:
+        return (f"refused at every --level: the command is {len(raw)} characters; the "
+                f"firmware's line buffer keeps {SHELL_LINE_MAX} and silently drops the rest.")
+    cmd = " ".join(raw.split())
+    low = cmd.lower()
+    for name, why in NEVER_SHELL.items():
+        if _word_prefix(low, name):
+            return (f"scope_shell never sends '{cmd}', at any --level "
+                    f"({', '.join(SHELL_LEVELS)}): `{name}` {why}. This shell command is "
+                    "never available over MCP; if it is really needed, ask the human at "
+                    "the bench to run it.")
+    if cmd in READ_ONLY_SHELL or level == "unsafe":
+        return None
+    bench, limit = _bench_verdict(cmd)
+    if level == "bench":
+        if bench:
+            return None
+        if limit:
+            return (f"'{cmd}' is not allowed at --level bench, where {limit}. This form "
+                    "needs --level unsafe, which only whoever starts the MCP server can choose.")
+        return (f"'{cmd}' is not allowed at --level bench (bench adds to the read-only "
+                f"commands: {', '.join(BENCH_SHELL)}). It needs --level unsafe, which only "
+                "whoever starts the MCP server can choose.")
+    return (f"'{cmd}' is not allowed at --level readonly, the default (allowed: "
+            f"{', '.join(READ_ONLY_SHELL)}). "
+            + ("It is a bench command: it needs --level bench or unsafe. " if bench
+               else f"At --level bench {limit}, so this form needs --level unsafe. " if limit
+               else "It needs --level unsafe. ")
+            + "Only whoever starts the MCP server can choose the level: the raw shell "
+            "can erase flash or desynchronise the FPGA.")
+
+
+def _bench_verdict(cmd: str) -> Tuple[bool, str]:
+    """(allowed at bench, why not if a BENCH_ARG_RULES limit refused it)."""
+    names = [n for n in BENCH_SHELL if _word_prefix(cmd, n)]
+    if not names:
+        return False, ""
+    name = max(names, key=len)          # the row the firmware would dispatch to
+    rule = BENCH_ARG_RULES.get(name)
+    if rule and not rule[0].fullmatch(cmd[len(name):].strip()):
+        return False, f"`{name}` takes {rule[1]} ({rule[2]})"
+    return True, ""
+
+
 SCREEN_HDR = re.compile(
     rb"SCREENBIN x=(\d+) y=(\d+) w=(\d+) h=(\d+) format=indexed4 len=(\d+) crc32=([0-9A-F]{8})\r\n")
 SCREEN_END = re.compile(rb"SCREENBIN END(?: crc32=([0-9A-F]{8}))?\r\n")

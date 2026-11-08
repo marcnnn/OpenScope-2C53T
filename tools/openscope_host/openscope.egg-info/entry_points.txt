@@ -1,0 +1,3 @@
+[console_scripts]
+openscope = openscope.cli:main
+openscope-mcp = openscope.mcp_server:main
