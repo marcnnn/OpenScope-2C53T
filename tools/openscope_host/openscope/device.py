@@ -74,7 +74,7 @@ BENCH_SHELL = (
     "mask",
     # acquisition knobs of the seam/poll experiments (EXP-29..54)
     "fpga postedge", "fpga pollgap", "fpga autowait", "fpga rearmwait", "fpga rearm",
-    "fpga acqgate", "fpga acqbr", "fpga pairgap", "fpga unrotate", "fpga edgefilter",
+    "fpga acqgate", "fpga acqbr", "fpga pairgap", "fpga unrotate", "fpga edgefilter", "fpga autolive",
     "fpga holdread", "fpga diag clear",
     # one FPGA read window, limited to the channel-read opcodes (BENCH_ARG_RULES)
     "spi3 opread",
