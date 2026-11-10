@@ -220,6 +220,14 @@ CFLAGS += -fdata-sections -ffunction-sections
 CFLAGS += -std=gnu11
 CFLAGS += -Os -g
 
+# Git revision baked into the version strings (STATUS fw_version, shell
+# `version`), so the unit says which commit it runs. Empty outside a git
+# checkout; override with `make GIT_REV=...`.
+GIT_REV ?= $(shell git rev-parse --short=10 HEAD 2>/dev/null)$(shell git diff --quiet HEAD -- 2>/dev/null || echo -dirty)
+ifneq ($(strip $(GIT_REV)),)
+CFLAGS += -DOPENSCOPE_GIT_REV=\"$(GIT_REV)\"
+endif
+
 # Assembler flags
 ASFLAGS = $(MCU) $(C_DEFS) $(C_INCLUDES)
 

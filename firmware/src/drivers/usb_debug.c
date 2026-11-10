@@ -740,6 +740,9 @@ static void cmd_version(void)
     usb_debug_printf(
         "OpenScope 2C53T\r\n"
         "Build: " __DATE__ " " __TIME__ ", gcc " __VERSION__ "\r\n"
+#ifdef OPENSCOPE_GIT_REV
+        "Git: " OPENSCOPE_GIT_REV "\r\n"
+#endif
 #ifdef FPGA_ALT_BITSTREAM
         "FPGA payload: " FPGA_BITSTREAM_NAME " (ALT — not the stock scope design)\r\n"
 #endif
@@ -8390,7 +8393,12 @@ static const char shell_banner[] =
  * at 0xAA and hands everything else to shell_feed() unchanged (§3.2). */
 /* 30 chars ("OpenScope Oct  1 2026 04:59:12"): fits the protocol's version field
  * whole, so two builds a minute apart stay distinguishable. */
-static const char s_fw_version[] = "OpenScope " __DATE__ " " __TIME__;
+#ifdef OPENSCOPE_GIT_REV
+#define OPENSCOPE_REV_SUFFIX " " OPENSCOPE_GIT_REV   /* +17 B worst case: stays under ESP_FW_VERSION_MAX */
+#else
+#define OPENSCOPE_REV_SUFFIX ""
+#endif
+static const char s_fw_version[] = "OpenScope " __DATE__ " " __TIME__ OPENSCOPE_REV_SUFFIX;
 
 static void remote_status(esp_status_snapshot_t *st)
 {
