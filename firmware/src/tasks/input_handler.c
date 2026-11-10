@@ -1121,8 +1121,28 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
             /* Drop PC9 LOW — device powers off */
             GPIOC->clr = (1U << 9);
 
-            /* Should never reach here */
-            while (1);
+            /* On battery the rail is gone within a few ms. Still running after
+             * that means USB holds the rail up on its own (docs/dfu_mode_guide.md):
+             * PC9 cannot turn the unit off while the cable is in. Before this,
+             * the unit sat in while(1) with "Goodbye!" lit and every button dead.
+             * Soft off instead: panel and backlight dark, PC9 stays LOW so pulling
+             * the cable really powers it down, and POWER starts it again. */
+            vTaskDelay(pdMS_TO_TICKS(300));
+            GPIOB->clr = (1U << 8);          /* PB8 = backlight off */
+            lcd_display_off();
+
+            /* Wait for the long press to end, then for a new press (PC8 active
+             * LOW), 100 ms debounced, and boot as from cold. main() raises PC9
+             * again before anything else. */
+            while (!(GPIOC->idt & (1U << 8)))
+                vTaskDelay(pdMS_TO_TICKS(20));
+            for (int held = 0; held < 5; ) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+                held = (GPIOC->idt & (1U << 8)) ? 0 : held + 1;
+            }
+            __DSB();
+            NVIC_SystemReset();
+            while (1) { }
         }
         power_done:
         break;
