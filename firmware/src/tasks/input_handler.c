@@ -347,6 +347,37 @@ static void mask_auto_key(char *pb, size_t n)
  * Main button dispatcher
  * ═══════════════════════════════════════════════════════════════════ */
 
+/* Drop PC9 (power hold). On battery the rail is gone within a few ms.
+ * Still running after that means USB holds the rail up on its own
+ * (docs/dfu_mode_guide.md): PC9 cannot turn the unit off while the cable
+ * is in. Before this, the unit sat in while(1) with its last message lit,
+ * POWER dead and USB silent (the spinning task starved the CDC task).
+ * Soft off instead: panel and backlight dark, PC9 stays LOW so pulling the
+ * cable really powers it down, and a POWER press boots it again. Task
+ * context only (vTaskDelay). */
+void power_off_now(void)
+{
+    GPIOC->clr = (1U << 9);
+    vTaskDelay(pdMS_TO_TICKS(300));
+
+    ui_modal_active = true;              /* the display task paints nothing more */
+    GPIOB->clr = (1U << 8);              /* PB8 = backlight off */
+    lcd_display_off();
+
+    /* Wait for a held POWER to be released, then for a new press (PC8 active
+     * LOW), 100 ms debounced, and boot as from cold. main() raises PC9
+     * again before anything else. */
+    while (!(GPIOC->idt & (1U << 8)))
+        vTaskDelay(pdMS_TO_TICKS(20));
+    for (int held = 0; held < 5; ) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+        held = (GPIOC->idt & (1U << 8)) ? 0 : held + 1;
+    }
+    __DSB();
+    NVIC_SystemReset();
+    while (1) { }
+}
+
 uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
 {
     scope_state_t *ss = scope_state_get();
@@ -1118,31 +1149,7 @@ uint8_t input_handle_button(button_id_t button, QueueHandle_t dq)
              * user, and before the rail drops. */
             (void)settings_store_flush(settings_now_ms());
 
-            /* Drop PC9 LOW — device powers off */
-            GPIOC->clr = (1U << 9);
-
-            /* On battery the rail is gone within a few ms. Still running after
-             * that means USB holds the rail up on its own (docs/dfu_mode_guide.md):
-             * PC9 cannot turn the unit off while the cable is in. Before this,
-             * the unit sat in while(1) with "Goodbye!" lit and every button dead.
-             * Soft off instead: panel and backlight dark, PC9 stays LOW so pulling
-             * the cable really powers it down, and POWER starts it again. */
-            vTaskDelay(pdMS_TO_TICKS(300));
-            GPIOB->clr = (1U << 8);          /* PB8 = backlight off */
-            lcd_display_off();
-
-            /* Wait for the long press to end, then for a new press (PC8 active
-             * LOW), 100 ms debounced, and boot as from cold. main() raises PC9
-             * again before anything else. */
-            while (!(GPIOC->idt & (1U << 8)))
-                vTaskDelay(pdMS_TO_TICKS(20));
-            for (int held = 0; held < 5; ) {
-                vTaskDelay(pdMS_TO_TICKS(20));
-                held = (GPIOC->idt & (1U << 8)) ? 0 : held + 1;
-            }
-            __DSB();
-            NVIC_SystemReset();
-            while (1) { }
+            power_off_now();
         }
         power_done:
         break;

@@ -24,6 +24,10 @@
  */
 uint8_t input_handle_button(button_id_t button, QueueHandle_t display_queue);
 
+/* Power off (PC9 LOW). On USB, where the cable keeps the rail up, a soft off:
+ * screen dark until the next POWER press reboots. Never returns; task context. */
+void power_off_now(void) __attribute__((noreturn));
+
 /*
  * Handle OK press in settings menu (top-level and sub-menus).
  * Called internally by input_handle_button, but exposed for testing.

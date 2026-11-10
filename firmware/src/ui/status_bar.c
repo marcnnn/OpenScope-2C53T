@@ -10,6 +10,9 @@
 #include "scope_cal.h"
 #include "scope_timebase.h"
 #include "battery.h"
+#include "input_handler.h"
+#include "FreeRTOS.h"
+#include "task.h"
 #include "at32f403a_407.h"
 #include <stdio.h>
 
@@ -58,8 +61,10 @@ void draw_status_bar(void)
         }
     }
 
-    /* Auto-shutdown at critical battery — protect the LiPo cell */
-    if (battery_is_critical()) {
+    /* Auto-shutdown at critical battery — protect the LiPo cell. Not while
+     * charging: the cable is already rescuing the cell, and PC9 cannot cut a
+     * USB-held rail anyway (power_off_now() would only blank the screen). */
+    if (battery_is_critical() && !battery_is_charging()) {
         static uint8_t shutdown_timer = 0;
         shutdown_timer++;
         if (shutdown_timer >= 30) {  /* 30 seconds of critical = shutdown */
@@ -68,10 +73,8 @@ void draw_status_bar(void)
                                     th->warning, 0x0000, &font_large);
             font_draw_string_center(160, 130, "Shutting down...",
                                     th->text_secondary, 0x0000, &font_medium);
-            /* Brief delay so user can see the message */
-            for (volatile uint32_t d = 0; d < 100000000; d++);
-            GPIOC->clr = (1U << 9);  /* PC9 LOW = power off */
-            while (1);
+            vTaskDelay(pdMS_TO_TICKS(2000));  /* let the user read it */
+            power_off_now();
         }
     }
 }
