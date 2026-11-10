@@ -4,8 +4,9 @@
 #   scripts/flash_tracked.sh [-t make-target] [-p port] [-m note] [--iap] [--no-push] [--dry-run]
 #
 # --iap: the unit is in firmware-update mode (MENU + pinhole reset, IAP drive):
-#        flash through scripts/iap_flash.py instead of the CDC shell. Run it in a
-#        terminal, the raw IAP write asks for sudo.
+#        flash through scripts/iap_flash.py instead of the CDC shell. Asks for sudo
+#        (raw IAP write). Remote, no terminal: FLASH_SUDO_STDIN=1 and pipe
+#        "<password>\ny\n" into the script.
 #
 # 1. refuses a dirty tree (the tag must describe exactly what was flashed)
 # 2. make <target> (default guest-coldtrace-meter); the image carries the git rev
@@ -92,7 +93,14 @@ echo "== flash"
 if [ $IAP = 1 ]; then
   # the bootloader looks for APP_*.bin; the archive keeps its own name
   IAPDIR=$(mktemp -d); IAPBIN="$IAPDIR/APP_2C53T_openscope_$REV.bin"; cp "$OUT" "$IAPBIN"
-  "$PY" scripts/iap_flash.py flash "$IAPBIN" || die "IAP flash failed; no tag set"
+  # the raw IAP write needs root; run the tool under sudo once. Without a terminal
+  # (remote), FLASH_SUDO_STDIN=1 makes sudo read the password from the first stdin
+  # line; the next line ("y") answers the tool's Proceed prompt.
+  if [ -n "${FLASH_SUDO_STDIN:-}" ]; then
+    sudo -S -p "" "$PY" scripts/iap_flash.py flash "$IAPBIN" || die "IAP flash failed; no tag set"
+  else
+    sudo "$PY" scripts/iap_flash.py flash "$IAPBIN" || die "IAP flash failed; no tag set"
+  fi
   rm -rf "$IAPDIR"
 else
   # cdc_flash exits non-zero when the port vanishes on reset; the version check below decides
